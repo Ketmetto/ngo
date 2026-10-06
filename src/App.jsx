@@ -20,13 +20,13 @@ h1:'كل الفرص المجانية للطلاب في لبنان، في مكا�
 how:'كيف يعمل',s1:'تصفّح',s1d:'اعثر على فرصة تناسبك.',s2:'اقرأ التفاصيل',s2d:'الموعد النهائي والموقع وشروط التقديم.',s3:'قدّم مباشرة',s3d:'اذهب إلى رابط الجمعية للتسجيل.',
 feat:'دورات مميزة',nw:'أحدث الفرص',partners:'جمعيات شريكة',ftag:'بلا إعلانات. بلا بيع للبيانات. صُنع للبنان.',fnote:'مجاني للطلاب دائماً.',
 lang:'اللغة',dark:'الوضع الداكن',fs:'حجم الخط',notif:'إشعارات البريد',logout:'تسجيل الخروج',deadline:'الموعد النهائي',apply:'سجّل الآن',
-oL:'فرصة منشورة',sL:'طالب مسجّل',pL:'جمعية شريكة',aL:'الإعلانات والتكلفة'};
+oL:'فرصة منشورة',sL:'طالب مسجّل',pL:'جمعية شريكة',aL:'الإعلانات والتكلفة',open:'مفتوح دائماً'};
 const EN={home:'Home',opps:'Opportunities',signin:'Sign in',settings:'Settings',about:'About us',privacy:'Privacy',terms:'Terms',contact:'Contact',
 h1:'Every free opportunity for students in Lebanon, in one place',sub:'Courses, training, internships and scholarships from NGOs. No more searching across Facebook pages.',browse:'Browse opportunities',
 how:'How it works',s1:'Browse',s1d:'Find an opportunity that fits you.',s2:'Read the details',s2d:'Deadline, location and requirements.',s3:'Apply directly',s3d:'Register on the NGO’s own link.',
 feat:'Featured',nw:'New this week',partners:'Partner NGOs',ftag:'No ads. No data selling. Built for Lebanon.',fnote:'Always free for students.',
 lang:'Language',dark:'Dark mode',fs:'Font size',notif:'Email notifications',logout:'Log out',deadline:'Deadline',apply:'Register now',
-oL:'Opportunities listed',sL:'Students registered',pL:'Partner NGOs',aL:'Ads and cost'};
+oL:'Opportunities listed',sL:'Students registered',pL:'Partner NGOs',aL:'Ads and cost',open:'Open anytime'};
 
 // ---------- Styles ----------
 const CSS = `
@@ -125,7 +125,7 @@ export default function App() {
 
   const me = session ? { id: session.user.id, email: session.user.email, name: profile?.full_name || session.user.email.split('@')[0], pic: profile?.avatar_url } : null
   const T = k => (P.lang === 'ar' ? AR : EN)[k] || EN[k]
-  const dt = s => new Date(s).toLocaleDateString(P.lang === 'ar' ? 'ar-LB' : 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  const dt = s => !s ? T('open') : new Date(s).toLocaleDateString(P.lang === 'ar' ? 'ar-LB' : 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 
   useEffect(() => {
     save('p', P)
@@ -139,7 +139,14 @@ export default function App() {
   useEffect(() => {
     if (!supabase) { setSession(null); return }
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
-    const { data } = supabase.auth.onAuthStateChange((ev, s) => { setSession(s); if (ev === 'PASSWORD_RECOVERY') location.hash = '#/reset' })
+    const { data } = supabase.auth.onAuthStateChange((ev, s) => {
+      setSession(s)
+      if (ev === 'PASSWORD_RECOVERY') location.hash = '#/reset'
+      if (ev === 'SIGNED_IN' && location.search.includes('code=')) { // back from Google: drop ?code= and open settings
+        history.replaceState(null, '', location.pathname + '#/settings')
+        dispatchEvent(new HashChangeEvent('hashchange'))
+      }
+    })
     return () => data.subscription.unsubscribe()
   }, [])
   useEffect(() => {
@@ -263,6 +270,8 @@ function Auth() {
   const [mode, setMode] = useState('in')
   const [f, setF] = useState({ n: '', e: '', p: '' })
   const [msg, setMsg] = useState({ t: '', ok: false })
+  const [wait, setWait] = useState(0) // seconds until "resend" is allowed again
+  useEffect(() => { if (wait > 0) { const t = setTimeout(() => setWait(wait - 1), 1000); return () => clearTimeout(t) } }, [wait])
   const set = k => e => setF({ ...f, [k]: e.target.value })
   const say = (t, ok = false) => setMsg({ t, ok })
   const ready = () => supabase || (say('Connect Supabase first (see README).'), false)
@@ -280,18 +289,37 @@ function Auth() {
       if (!f.n.trim()) return say('Enter your name.')
       const { data, error } = await supabase.auth.signUp({ email: e, password: f.p, options: { data: { full_name: f.n.trim() }, emailRedirectTo: location.origin } })
       if (error) return say(error.message)
-      return data.session ? (location.hash = '#/settings') : say('Check your email to confirm your account, then sign in.', true)
+      if (data.user?.identities?.length === 0) return say('An account with this email already exists. Sign in instead.')
+      if (data.session) return (location.hash = '#/settings')
+      setWait(60); setMode('check'); return say('')
     }
     const { error } = await supabase.auth.signInWithPassword({ email: e, password: f.p })
+    if (error?.code === 'email_not_confirmed') { setMode('check'); return say('Confirm your email first. Use the link we sent you, or send a new one below.') }
     error ? say('Email or password is incorrect.') : (location.hash = '#/settings')
+  }
+  async function resend() {
+    const { error } = await supabase.auth.resend({ type: 'signup', email: f.e.trim().toLowerCase(), options: { emailRedirectTo: location.origin } })
+    if (error) return say(error.status === 429 ? 'Too many emails sent. Please wait a few minutes and try again.' : error.message)
+    setWait(60); say('A new confirmation email is on its way.', true)
   }
   async function google() {
     if (!ready()) return
-    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/#/settings' } })
+    const { error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/' } })
     if (error) say(error.message)
   }
 
   const go = m => { setMode(m); say('') }
+  if (mode === 'check') return (
+    <div className="f">
+      <h2>Check your inbox</h2>
+      <p>We sent a confirmation link to <b>{f.e.trim().toLowerCase()}</b>. Open it in this browser to activate your account. It expires in 1 hour.</p>
+      <p>Can't find it? Check your spam folder.</p>
+      <button className="btn o" onClick={resend} disabled={wait > 0}>{wait > 0 ? `Resend email (${wait}s)` : 'Resend email'}</button>
+      <button className="lk" onClick={() => go('up')}>Use a different email</button>
+      <button className="lk" onClick={() => go('in')}>Back to sign in</button>
+      <p className={'msg' + (msg.ok ? ' ok' : '')} role="alert">{msg.t}</p>
+    </div>
+  )
   return (
     <div className="f">
       <div className="tabs">

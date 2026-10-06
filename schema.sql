@@ -15,8 +15,9 @@ create table opportunities (
   category text not null check (category in ('Course','Training','Internship','Scholarship')),
   description text not null,
   location text not null,
-  deadline date not null,
+  deadline date,                -- null = self-paced / always open
   apply_url text not null,
+  source_url text unique,       -- page the scraper took it from; used to upsert without duplicates
   featured boolean default false,
   published boolean default true,
   created_at timestamptz default now()
@@ -50,8 +51,11 @@ create table support_messages (
 create function handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
-  insert into profiles (id, full_name)
-  values (new.id, coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)));
+  -- Google sign-in fills full_name and avatar_url in raw_user_meta_data
+  insert into profiles (id, full_name, avatar_url)
+  values (new.id,
+          coalesce(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
+          new.raw_user_meta_data->>'avatar_url');
   return new;
 end $$;
 create trigger on_auth_user_created after insert on auth.users

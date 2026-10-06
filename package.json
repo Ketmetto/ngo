@@ -8,8 +8,20 @@
     "web": "vite",
     "server": "node server/index.js",
     "build": "vite build",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "scrape": "node server/scrape.js"
   },
-  "dependencies": { "@supabase/supabase-js": "^2.45.0", "dotenv": "^16.4.5", "express": "^4.19.2", "nodemailer": "^6.9.14", "react": "^18.3.1", "react-dom": "^18.3.1" },
-  "devDependencies": { "@vitejs/plugin-react": "^4.3.1", "concurrently": "^8.2.2", "vite": "^5.4.0" }
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "vite": "^5.4.0"
+  }
 }
