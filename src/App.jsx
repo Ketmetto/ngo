@@ -138,7 +138,15 @@ export default function App() {
   useEffect(() => { if (r === 'settings' && session === null) location.hash = '#/auth' }, [r, session])
   useEffect(() => {
     if (!supabase) { setSession(null); return }
-    supabase.auth.getSession().then(({ data }) => setSession(data.session))
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      // Confirmation link opened on another device/browser: the email is confirmed but this browser can't finish signing in
+      const q = new URLSearchParams(location.search)
+      if (!data.session && (q.has('code') || q.has('error'))) {
+        history.replaceState(null, '', location.pathname + (q.has('error') ? '#/auth/expired' : '#/auth/confirmed'))
+        dispatchEvent(new HashChangeEvent('hashchange'))
+      }
+    })
     const { data } = supabase.auth.onAuthStateChange((ev, s) => {
       setSession(s)
       if (ev === 'PASSWORD_RECOVERY') location.hash = '#/reset'
@@ -163,7 +171,7 @@ export default function App() {
   const ctx = { T, dt, P, setP, me, setProfile, opps, stats }
   const pages = {
     home: <Home {...ctx} />, opps: <Opps {...ctx} />, course: <Course {...ctx} id={id} />,
-    auth: <Auth {...ctx} />, settings: me ? <Settings {...ctx} /> : null,
+    auth: <Auth {...ctx} id={id} />, settings: me ? <Settings {...ctx} /> : null,
     about: <Page h="About us" t="Fursa connects students in Lebanon with free courses, training, internships and scholarships from NGOs. Students always stay free." />,
     privacy: <Page h="Privacy" t="We collect only what we need to run your account. We never sell your data and we show no ads. You can delete your account any time from Settings." />,
     terms: <Page h="Terms" t="Fursa lists opportunities posted by third-party NGOs. Applications happen on the NGO's own link. Check deadlines with the NGO before applying." />,
@@ -266,10 +274,16 @@ function Course({ T, dt, id, opps }) {
   )
 }
 
-function Auth() {
+const AUTH_NOTE = {
+  confirmed: { t: 'Your email is confirmed! Sign in to continue.', ok: true },
+  expired: { t: 'That link is invalid or has expired. Sign in to get a new one.', ok: false },
+}
+
+function Auth({ id }) {
   const [mode, setMode] = useState('in')
   const [f, setF] = useState({ n: '', e: '', p: '' })
-  const [msg, setMsg] = useState({ t: '', ok: false })
+  const [msg, setMsg] = useState(AUTH_NOTE[id] || { t: '', ok: false })
+  useEffect(() => { if (AUTH_NOTE[id]) setMsg(AUTH_NOTE[id]) }, [id])
   const [wait, setWait] = useState(0) // seconds until "resend" is allowed again
   useEffect(() => { if (wait > 0) { const t = setTimeout(() => setWait(wait - 1), 1000); return () => clearTimeout(t) } }, [wait])
   const set = k => e => setF({ ...f, [k]: e.target.value })
@@ -297,6 +311,19 @@ function Auth() {
     if (error?.code === 'email_not_confirmed') { setMode('check'); return say('Confirm your email first. Use the link we sent you, or send a new one below.') }
     error ? say('Email or password is incorrect.') : (location.hash = '#/settings')
   }
+  // On the "check your inbox" screen: if the link was opened on another device, signing in with the same password now works
+  async function confirmed(quiet) {
+    const { error } = await supabase.auth.signInWithPassword({ email: f.e.trim().toLowerCase(), password: f.p })
+    if (!error) return (location.hash = '#/settings')
+    if (!quiet) say(error.code === 'email_not_confirmed' ? 'Not confirmed yet. Open the link in the email first.' : 'Email or password is incorrect.')
+  }
+  useEffect(() => {
+    if (mode !== 'check' || !f.p) return
+    const f2 = () => document.visibilityState === 'visible' && confirmed(true)
+    const t = setInterval(f2, 15000) // keep checking while the tab is open
+    addEventListener('focus', f2); document.addEventListener('visibilitychange', f2)
+    return () => { clearInterval(t); removeEventListener('focus', f2); document.removeEventListener('visibilitychange', f2) }
+  }, [mode])
   async function resend() {
     const { error } = await supabase.auth.resend({ type: 'signup', email: f.e.trim().toLowerCase(), options: { emailRedirectTo: location.origin } })
     if (error) return say(error.status === 429 ? 'Too many emails sent. Please wait a few minutes and try again.' : error.message)
@@ -313,7 +340,8 @@ function Auth() {
     <div className="f">
       <h2>Check your inbox</h2>
       <p>We sent a confirmation link to <b>{f.e.trim().toLowerCase()}</b>. Open it in this browser to activate your account. It expires in 1 hour.</p>
-      <p>Can't find it? Check your spam folder.</p>
+      <p>Can't find it? Check your spam folder. Opened it on your phone? This page signs you in automatically once you confirm.</p>
+      {f.p && <button className="btn" onClick={() => confirmed(false)}>I've confirmed my email</button>}
       <button className="btn o" onClick={resend} disabled={wait > 0}>{wait > 0 ? `Resend email (${wait}s)` : 'Resend email'}</button>
       <button className="lk" onClick={() => go('up')}>Use a different email</button>
       <button className="lk" onClick={() => go('in')}>Back to sign in</button>
